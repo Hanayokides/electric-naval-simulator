@@ -1,49 +1,49 @@
-# Simulador Naval Elétrico
+# Electric Vessel Simulator
 
-Modelo de dimensionamento e viabilidade financeira para uma embarcação de transporte de passageiros (catamarã, 53 m), comparando diferentes estratégias de propulsão:
+Sizing and financial viability model for a passenger vessel (catamaran, 53 m), comparing different propulsion strategies:
 
-- **Diesel** (motor a combustão, baseline)
-- **Recarga Rápida** (1 e 2 terminais)
-- **Recarga Lenta** (overnight)
-- **Recarga Mista** (combinação de rápida + lenta, com potência de infraestrutura ajustável, 1 e 2 terminais)
+- **Diesel** (internal combustion engine, baseline)
+- **Fast Charging** (1 and 2 terminals)
+- **Slow Charging** (overnight)
+- **Mixed Charging** (fast + slow combination, with adjustable infrastructure power, 1 and 2 terminals)
 
-Para cada configuração, o modelo dimensiona o casco (calado de equilíbrio via balanço de massa/empuxo), calcula a demanda energética da rota e estima a Taxa Interna de Retorno (TIR) e o Valor Presente Líquido (VPL) do investimento.
+For each configuration, the model sizes the hull (equilibrium draught via mass/buoyancy balance), calculates the route's energy demand, and estimates the Internal Rate of Return (IRR) and Net Present Value (NPV) of the investment.
 
-## Estrutura do código
+## Code structure
 
-| Arquivo | Conteúdo |
+| File | Content |
 |---|---|
-| `calculos_comuns.py` | Equações de hidrostática e massa estrutural do casco (comuns a todas as configurações) |
-| `recargas.py` | Modelos de demanda energética e retorno financeiro para Recarga Rápida, Lenta e Mista |
-| `diesel.py` | Modelo de retorno financeiro para a configuração a Diesel |
-| `main.py` | Orquestração das simulações, geração dos relatórios (Excel e Word) e dos gráficos de sensibilidade |
+| `calculos_comuns.py` | Hydrostatics and structural mass equations for the hull (common to all configurations) |
+| `recargas.py` | Energy demand and financial return models for Fast, Slow, and Mixed Charging |
+| `diesel.py` | Financial return model for the Diesel configuration |
+| `main.py` | Orchestrates the simulations, generates the reports (Excel and Word), and the sensitivity charts |
 
-## Como rodar
+## How to run
 
-### Dependências
+### Dependencies
 
 ```bash
 pip install pandas numpy matplotlib scipy numpy-financial python-docx openpyxl
 ```
 
-### Execução
+### Execution
 
 ```bash
 python main.py
 ```
 
-O programa pergunta o modo de execução:
-- **O** — apenas os resultados ótimos (DOD que maximiza o TIR em cada configuração)
-- **M** — inclui também uma varredura de múltiplos valores de DOD para comparação
-- **ESC** — encerra sem rodar
+The program asks for the execution mode:
+- **O** — optimal results only (DOD that maximizes IRR for each configuration)
+- **M** — also includes a sweep across multiple DOD values for comparison
+- **ESC** — exits without running
 
-### Saídas
+### Outputs
 
-- Uma planilha Excel (`planilha_dimensionamento_completa_*.xlsx`) com os resultados detalhados de cada configuração, rota e velocidade simulada.
-- Um relatório Word (`relatorio_graficos_completo_*.docx`) com os gráficos de sensibilidade (TIR vs. DOD, TIR vs. Potência de infraestrutura) e tabelas-resumo.
+- An Excel spreadsheet (`planilha_dimensionamento_completa_*.xlsx`) with detailed results for each simulated configuration, route, and speed.
+- A Word report (`relatorio_graficos_completo_*.docx`) with summary results, sensitivity charts (IRR vs. DOD, IRR vs. infrastructure power), and summary tables.
 
-## Parâmetros principais
+## Main parameters
 
-- Comprimento da embarcação: 53 m (fixo)
-- Rotas simuladas: 5, 7.5, 10, 12.5 e 15 km
-- Velocidades simuladas: 8, 12, 16 e 20 nós
+- Vessel length: 53 m (fixed)
+- Simulated routes: 5, 7.5, 10, 12.5, and 15 km
+- Simulated speeds: 8, 12, 16, and 20 knots
