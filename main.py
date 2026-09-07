@@ -68,9 +68,8 @@ class GerenciadorRelatorio:
         return minimize_scalar(objetivo, bounds=(1.0, 20.0), method='bounded').x
 
     def rodar_otimizacao_mista_potencia(self, L, tipo_terminal, v_knts, d_km, dod_pct, pot_min=200.0, pot_max=6000.0, n_pontos=120):
-        # DOD fixo, varia a potência de infraestrutura para achar a que maximiza o TIR.
-        # Busca em grade em vez de um otimizador contínuo, pois a curva TIR x Potência pode ter
-        # trechos sem convergência que atrapalhariam um método baseado em gradiente/bissecção.
+        # DOD fixo; varia a potência de infraestrutura para achar a que maximiza o TIR.
+        # Busca em grade (a curva TIR x Potência pode ter trechos sem convergência).
         variavel_dod = 1.0 / (dod_pct / 100.0)
         melhor_pot, melhor_res, melhor_tir = None, None, -1e18
         for pot in np.linspace(pot_min, pot_max, n_pontos):
@@ -161,10 +160,7 @@ class GerenciadorRelatorio:
         return path_viabilidade
 
     def encontrar_dod_otimo_mista(self, L, tipo_terminal, v_knts, d_km, pot_referencia):
-        # Acha o DOD que maximiza o TIR numa potência de referência, usado como uma das curvas
-        # fixas do gráfico TIR vs Potência. Busca em grade pelo mesmo motivo de
-        # rodar_otimizacao_mista_potencia: a curva pode ter trechos sem convergência perto das
-        # bordas de DOD que atrapalhariam um otimizador contínuo.
+        # DOD que maximiza o TIR numa potência de referência. Busca em grade.
         melhor_dod, melhor_tir = 50.0, -1e18
         for dod_pct in np.linspace(10, 90, 100):
             res = self.mista.simular(L, 100.0 / dod_pct, tipo_terminal, v_knts, d_km=d_km, pot_infra_manual=pot_referencia)
@@ -403,6 +399,304 @@ class GerenciadorRelatorio:
         wb.save(filename)
         print(f" [SUCESSO EXCEL] Planilha consolidada gerada em: {filename}")
 
+    def adicionar_legenda(self, doc, texto, is_table=False, contador=None):
+        prefixo = "Table" if is_table else "Figure"
+        contador[0] += 1
+        p = doc.add_paragraph()
+        r = p.add_run(f"{prefixo} {contador[0]}. {texto}")
+        r.italic = True
+        r.font.size = Pt(9.5)
+        r.font.name = 'Calibri'
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p.paragraph_format.space_after = Pt(14)
+
+    def adicionar_tabela_simples(self, doc, headers, rows):
+        table = doc.add_table(rows=1, cols=len(headers))
+        table.style = 'Light Grid Accent 1'
+        hdr = table.rows[0].cells
+        for i, htext in enumerate(headers):
+            hdr[i].text = str(htext)
+            for p in hdr[i].paragraphs:
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                for r in p.runs:
+                    r.font.bold = True
+                    r.font.size = Pt(9.5)
+        for row in rows:
+            cells = table.add_row().cells
+            for i, val in enumerate(row):
+                cells[i].text = str(val)
+                for p in cells[i].paragraphs:
+                    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    for r in p.runs:
+                        r.font.size = Pt(9.5)
+        doc.add_paragraph().paragraph_format.space_after = Pt(4)
+        return table
+
+    def gerar_secao_resumo_executivo(self, doc, resultados_otimos_apenas, L_usuario):
+        fig_count = [0]
+        tab_count = [0]
+
+        lookup = {}
+        for item in resultados_otimos_apenas:
+            lookup[(item['distancia'], item['v'], item['t'])] = item['res']
+
+        rotas = self.distancias_rota_km
+        velocidades = self.velocidades_alvo
+        d_ref = 5.0 if 5.0 in rotas else rotas[0]
+        v_ref = 12 if 12 in velocidades else velocidades[0]
+
+        todas_config_eletricas = (["1T", "2T", "Lenta"]
+                                   + [f"M1T_{p}" for p in self.mista_1t_potencias_alvo]
+                                   + [f"M2T_{p}" for p in self.mista_2t_potencias_alvo])
+
+        def tir_valido(res):
+            if res is None or not res.get("convergido"):
+                return None
+            tir = res.get("tir")
+            if tir is None or (isinstance(tir, float) and math.isnan(tir)):
+                return None
+            return tir * 100.0
+
+        doc.add_paragraph("Summary Results").runs[0].font.bold = True
+
+        # Figura 1 - IRR vs DOD no cenario de referencia (1T, 2T, Lenta)
+        if d_ref in rotas and v_ref in velocidades:
+            p_base = self.gerar_grafico_suave_dod(L_usuario, v_ref, d_ref)
+            doc.add_picture(p_base, width=Inches(6.2))
+            self.adicionar_legenda(
+                doc,
+                f"Internal Rate of Return as a function of depth of discharge (DOD) for fast charging "
+                f"(1 and 2 terminals) and slow (overnight) charging, at the reference scenario "
+                f"({v_ref} knots, {d_ref:.1f} km route).",
+                contador=fig_count
+            )
+            os.remove(p_base)
+
+        # Figura 2 - barras comparando todas as configuracoes no cenario de referencia
+        labels, tirs, colors = [], [], []
+        label_map = {"1T": "Fast\n1 Terminal", "2T": "Fast\n2 Terminals", "Lenta": "Slow\n(overnight)"}
+        for t in ["1T", "2T", "Lenta"]:
+            labels.append(label_map[t])
+            tirs.append(tir_valido(lookup.get((d_ref, v_ref, t))))
+            colors.append("#1f77b4")
+        for p in self.mista_1t_potencias_alvo:
+            labels.append(f"Mixed 1T\n{p} kW")
+            tirs.append(tir_valido(lookup.get((d_ref, v_ref, f"M1T_{p}"))))
+            colors.append("#9467bd")
+        for p in self.mista_2t_potencias_alvo:
+            labels.append(f"Mixed 2T\n{p} kW")
+            tirs.append(tir_valido(lookup.get((d_ref, v_ref, f"M2T_{p}"))))
+            colors.append("#8c564b")
+        diesel_tir = tir_valido(lookup.get((d_ref, v_ref, "Diesel")))
+
+        plt.figure(figsize=(10, 5))
+        xs = range(len(labels))
+        alturas = [t if t is not None else 0 for t in tirs]
+        plt.bar(xs, alturas, color=colors)
+        if diesel_tir is not None:
+            plt.axhline(diesel_tir, color='black', linestyle='--', linewidth=1.3, label=f'Diesel baseline ({diesel_tir:.1f}%)')
+            plt.legend(loc='upper right')
+        plt.xticks(list(xs), labels, fontsize=8)
+        plt.ylabel('Internal Rate of Return (%)')
+        plt.title(f'IRR by charging strategy - reference scenario ({v_ref} knots, {d_ref:.1f} km route)')
+        plt.grid(axis='y', linestyle='--', alpha=0.4)
+        for i, v in enumerate(tirs):
+            if v is not None:
+                plt.text(i, v + (1.2 if v >= 0 else -2.2), f'{v:.1f}', ha='center', fontsize=8)
+            else:
+                plt.text(i, 0.5, 'n/c', ha='center', fontsize=8, color='gray', rotation=90)
+        plt.tight_layout()
+        path_bar = f'fig_resumo_barras_{v_ref}kn_{d_ref}km.png'
+        plt.savefig(path_bar, dpi=300, bbox_inches='tight')
+        plt.close()
+        doc.add_picture(path_bar, width=Inches(6.3))
+        self.adicionar_legenda(
+            doc,
+            f"Internal Rate of Return by charging strategy for the reference scenario "
+            f"({v_ref} knots, {d_ref:.1f} km route). \"n/c\" denotes configurations for which no "
+            f"converged, financially defined solution was obtained.",
+            contador=fig_count
+        )
+        os.remove(path_bar)
+
+        # Figura 3 - mapas de calor Diesel vs melhor eletrica em toda a grade
+        diesel_grid = np.full((len(rotas), len(velocidades)), np.nan)
+        eletrica_grid = np.full((len(rotas), len(velocidades)), np.nan)
+        for i, r in enumerate(rotas):
+            for j, v in enumerate(velocidades):
+                dtir = tir_valido(lookup.get((r, v, "Diesel")))
+                if dtir is not None:
+                    diesel_grid[i, j] = dtir
+                melhor = None
+                for t in todas_config_eletricas:
+                    etir = tir_valido(lookup.get((r, v, t)))
+                    if etir is not None and (melhor is None or etir > melhor):
+                        melhor = etir
+                if melhor is not None:
+                    eletrica_grid[i, j] = melhor
+
+        fig, axes = plt.subplots(1, 2, figsize=(10, 4.2), constrained_layout=True)
+        validos = np.concatenate([diesel_grid[~np.isnan(diesel_grid)], eletrica_grid[~np.isnan(eletrica_grid)]])
+        vmin, vmax = (validos.min(), validos.max()) if len(validos) else (0, 1)
+        im = None
+        for ax, grid, title in zip(axes, [diesel_grid, eletrica_grid], ['Diesel baseline', 'Best electric configuration']):
+            im = ax.imshow(grid, cmap='RdYlGn', vmin=vmin, vmax=vmax, aspect='auto')
+            ax.set_xticks(range(len(velocidades))); ax.set_xticklabels(velocidades)
+            ax.set_yticks(range(len(rotas))); ax.set_yticklabels(rotas)
+            ax.set_xlabel('Speed (knots)'); ax.set_ylabel('Route length (km)')
+            ax.set_title(title)
+            for i in range(len(rotas)):
+                for j in range(len(velocidades)):
+                    val = grid[i, j]
+                    if not np.isnan(val):
+                        ax.text(j, i, f'{val:.1f}', ha='center', va='center', fontsize=8,
+                                 color='black' if abs(val) < 25 else 'white')
+                    else:
+                        ax.text(j, i, 'n/c', ha='center', va='center', fontsize=8, color='gray')
+        fig.colorbar(im, ax=axes, shrink=0.85, pad=0.02, label='Internal Rate of Return (%)')
+        path_heat = 'fig_resumo_heatmaps.png'
+        plt.savefig(path_heat, dpi=300, bbox_inches='tight')
+        plt.close()
+        doc.add_picture(path_heat, width=Inches(6.3))
+        self.adicionar_legenda(
+            doc,
+            "Internal Rate of Return (%) across the tested route-length/speed envelope for the diesel "
+            "baseline (left) and the best-performing electric configuration at each grid point (right). "
+            "\"n/c\" denotes combinations for which no economically or numerically valid solution was obtained.",
+            contador=fig_count
+        )
+        os.remove(path_heat)
+
+        # Figura 4 - sensibilidade do TIR ao tamanho da rota, na velocidade de referencia
+        plt.figure(figsize=(7.5, 5))
+        series = [("Diesel", "Diesel", "black", "o", "-"), ("1T", "1T", "#1f77b4", "s", "-"),
+                  ("2T", "2T", "#ff7f0e", "^", "-"), ("Lenta", "Slow (overnight)", "#2ca02c", "d", "--")]
+        for t, label, color, marker, ls in series:
+            xs_r, ys_r = [], []
+            for r in rotas:
+                v = tir_valido(lookup.get((r, v_ref, t)))
+                if v is not None:
+                    xs_r.append(r); ys_r.append(v)
+            if xs_r:
+                plt.plot(xs_r, ys_r, marker=marker, linestyle=ls, color=color, label=label, linewidth=1.8, markersize=6)
+        plt.axhline(0, color='gray', linewidth=0.8)
+        plt.xlabel('Route length (km)'); plt.ylabel('Internal Rate of Return (%)')
+        plt.title(f'IRR sensitivity to route length at {v_ref} knots')
+        plt.grid(True, linestyle='--', alpha=0.4)
+        plt.legend()
+        plt.tight_layout()
+        path_sens = 'fig_resumo_sensibilidade_rota.png'
+        plt.savefig(path_sens, dpi=300, bbox_inches='tight')
+        plt.close()
+        doc.add_picture(path_sens, width=Inches(5.8))
+        self.adicionar_legenda(
+            doc,
+            f"Internal Rate of Return sensitivity to route length at a fixed cruising speed of "
+            f"{v_ref} knots, for the diesel baseline and the three primary electric configurations.",
+            contador=fig_count
+        )
+        os.remove(path_sens)
+
+        # Figura 5 - DOD otimo em funcao da velocidade, por rota, para 1T e 2T
+        fig, axes = plt.subplots(1, 2, figsize=(10, 4.3), sharey=True, constrained_layout=True)
+        cores_rota = plt.cm.viridis_r([i / max(1, len(rotas) - 1) for i in range(len(rotas))])
+        for ax, t, title in zip(axes, ["1T", "2T"], ["Fast charging - 1 terminal", "Fast charging - 2 terminals"]):
+            for r, cor in zip(rotas, cores_rota):
+                xs_v, ys_v = [], []
+                for v in velocidades:
+                    res = lookup.get((r, v, t))
+                    if res is None or not res.get("convergido"):
+                        continue
+                    dod = res.get("dod_efetivo")
+                    tir = res.get("tir")
+                    if dod in (None, "-") or (isinstance(tir, float) and math.isnan(tir)) or dod <= 0.06:
+                        continue
+                    xs_v.append(v); ys_v.append(dod * 100.0)
+                if xs_v:
+                    ax.plot(xs_v, ys_v, marker='o', color=cor, label=f'{r:.1f} km')
+            ax.axhspan(35, 40, color='gray', alpha=0.15)
+            ax.set_xlabel('Speed (knots)')
+            ax.set_title(title)
+            ax.grid(True, linestyle='--', alpha=0.4)
+        axes[0].set_ylabel('Optimal design DOD (%)')
+        axes[1].legend(title='Route length', loc='upper right', fontsize=8)
+        path_dod = 'fig_resumo_dod_otimo.png'
+        plt.savefig(path_dod, dpi=300, bbox_inches='tight')
+        plt.close()
+        doc.add_picture(path_dod, width=Inches(6.3))
+        self.adicionar_legenda(
+            doc,
+            "Optimal design DOD as a function of speed, for each route length, for single-terminal "
+            "(left) and two-terminal (right) fast charging. The shaded band marks the 35-40% range. "
+            "Non-convergent or non-viable points are excluded.",
+            contador=fig_count
+        )
+        os.remove(path_dod)
+
+        # Tabela 1 - resumo do cenario de referencia
+        linhas_tab1 = []
+        nomes = [("Diesel baseline", "Diesel"), ("Fast charging, 1 terminal", "1T"),
+                 ("Fast charging, 2 terminals", "2T"), ("Slow (overnight) charging", "Lenta")]
+        for nome, t in nomes:
+            res = lookup.get((d_ref, v_ref, t))
+            if res is None:
+                continue
+            tir = tir_valido(res)
+            dod = res.get("dod_efetivo")
+            dod_str = f"{dod*100:.1f}%" if isinstance(dod, (int, float)) else "-"
+            banco = res.get("b_bateria_rec")
+            banco_str = f"{banco:,.0f}" if isinstance(banco, (int, float)) else "-"
+            pot = res.get("pot_infra")
+            pot_str = f"{pot:,.0f}" if isinstance(pot, (int, float)) else "-"
+            vpl = res.get("vpl")
+            vpl_str = f"{vpl:,.0f}" if isinstance(vpl, (int, float)) and not math.isnan(vpl) else "N/A"
+            tir_str = f"{tir:.1f}" if tir is not None else "N/A"
+            linhas_tab1.append([nome, dod_str, banco_str, pot_str, tir_str, vpl_str])
+        self.adicionar_tabela_simples(
+            doc,
+            ["Configuration", "Design DOD", "Battery capacity (kWh)", "Charger power (kW)", "IRR (%)", "NPV (USD)"],
+            linhas_tab1
+        )
+        self.adicionar_legenda(
+            doc,
+            f"Optimal-DOD results for the reference scenario ({v_ref} knots, {d_ref:.1f} km route).",
+            is_table=True, contador=tab_count
+        )
+
+        # Tabela 2 - velocidade maxima viavel (TIR >= TMA) por tamanho de rota
+        tma = 7.0
+        linhas_tab2 = []
+        for r in rotas:
+            v_max_diesel, v_max_eletrica = None, None
+            for v in velocidades:
+                dtir = tir_valido(lookup.get((r, v, "Diesel")))
+                if dtir is not None and dtir >= tma:
+                    v_max_diesel = v
+                melhor = None
+                for t in todas_config_eletricas:
+                    etir = tir_valido(lookup.get((r, v, t)))
+                    if etir is not None and (melhor is None or etir > melhor):
+                        melhor = etir
+                if melhor is not None and melhor >= tma:
+                    v_max_eletrica = v
+            linhas_tab2.append([
+                f"{r:.1f}",
+                str(v_max_diesel) if v_max_diesel is not None else "not viable",
+                str(v_max_eletrica) if v_max_eletrica is not None else "not viable"
+            ])
+        self.adicionar_tabela_simples(
+            doc,
+            ["Route length (km)", "Max. viable speed - Diesel (kn)", "Max. viable speed - Electric, best config. (kn)"],
+            linhas_tab2
+        )
+        self.adicionar_legenda(
+            doc,
+            f"Highest tested service speed at which each propulsion type remains a financially viable "
+            f"investment (IRR >= {tma:.0f}%), by route length.",
+            is_table=True, contador=tab_count
+        )
+        doc.add_paragraph("\n")
+
     def adicionar_borda_tabela(self, cell):
         tcPr = cell._tc.get_or_add_tcPr()
         borders = parse_xml(
@@ -497,6 +791,8 @@ class GerenciadorRelatorio:
 
         doc = Document()
         doc.add_paragraph("HYDRODYNAMIC-FINANCIAL SENSITIVITY REPORT").runs[0].font.bold = True
+
+        self.gerar_secao_resumo_executivo(doc, resultados_otimos_apenas, L_usuario)
 
         for d_km in self.distancias_rota_km:
             doc.add_paragraph(f"Operational Scenario Route Length: {d_km:.1f} km").runs[0].font.bold = True
