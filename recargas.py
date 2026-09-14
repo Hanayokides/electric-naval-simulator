@@ -82,15 +82,15 @@ class RecargaBase:
     def calcular_financas_e_retorno(self, L, T_eq, v_knts_t, d_km, tipo_terminal, num_infra, f_fisica,
                                      banco_bateria_kwh, pot_infraestrutura_recarga, convergido, tag_caso="",
                                      modo_lento=False, modo_misto=False, banco_bruto_lento=0.0,
-                                     banco_util_misto=0.0):
+                                     banco_util_misto=0.0, bateria_usd_kWh=500, fator_custo_infra=1.0,
+                                     fator_eol=1.0):
         boca_max = L / 2
         pontal = T_eq + 1.1
-        bateria_usd_kWh = 500
         cotacao_real_dolar = 4.81
         taxa_desconto = 0.07
 
         banco_baterias = bateria_usd_kWh * banco_bateria_kwh
-        infraestrutura_recarga = (691.75 * pot_infraestrutura_recarga + 1349.4) * num_infra
+        infraestrutura_recarga = (691.75 * pot_infraestrutura_recarga + 1349.4) * num_infra * fator_custo_infra
         soma_custos_capital = banco_baterias + infraestrutura_recarga + banco_baterias
         custo_cabeamento = banco_baterias * 0.1
         custo_motorizacao = 275 * f_fisica["pot_nominal_eixo"]
@@ -136,7 +136,7 @@ class RecargaBase:
         num_ciclos_anual = num_ciclo_dia * 350
 
         try:
-            num_ciclos_ate_EOL = 533.95 / (0.00157317624848057 * crate_carga**2 +
+            num_ciclos_ate_EOL = fator_eol * 533.95 / (0.00157317624848057 * crate_carga**2 +
                                             0.142518825665524 * dod_efetivo**2 +
                                             0.0436969889496851)
             if modo_lento:
@@ -222,7 +222,8 @@ class RecargaBase:
 
 
 class RecargaRapida(RecargaBase):
-    def simular(self, L, variavel_dod, tipo_terminal, v_knts_t, d_km=5.0, forcar_debug=False):
+    def simular(self, L, variavel_dod, tipo_terminal, v_knts_t, d_km=5.0, forcar_debug=False,
+                bateria_usd_kWh=500, fator_custo_infra=1.0, fator_eol=1.0):
         from scipy.optimize import brentq, minimize_scalar
         num_infra = 1.0 if tipo_terminal == "1T" else 2.0
 
@@ -255,11 +256,14 @@ class RecargaRapida(RecargaBase):
 
         return self.calcular_financas_e_retorno(L, T_eq, v_knts_t, d_km, tipo_terminal, num_infra, fisica_final,
                                                   banco_final_kwh, pot_infra, convergido,
-                                                  f"RECARGA RAPIDA ({tipo_terminal})")
+                                                  f"RECARGA RAPIDA ({tipo_terminal})",
+                                                  bateria_usd_kWh=bateria_usd_kWh,
+                                                  fator_custo_infra=fator_custo_infra, fator_eol=fator_eol)
 
 
 class RecargaLenta(RecargaBase):
-    def simular(self, L, variavel_dod, tipo_terminal="Lenta", v_knts_t=12.0, d_km=5.0, forcar_debug=False):
+    def simular(self, L, variavel_dod, tipo_terminal="Lenta", v_knts_t=12.0, d_km=5.0, forcar_debug=False,
+                bateria_usd_kWh=500, fator_custo_infra=1.0, fator_eol=1.0):
         from scipy.optimize import brentq, minimize_scalar
         num_infra = 1.0
 
@@ -292,7 +296,9 @@ class RecargaLenta(RecargaBase):
         return self.calcular_financas_e_retorno(L, T_eq, v_knts_t, d_km, tipo_terminal, num_infra, fisica_final,
                                                   banco_final_kwh, pot_infra, convergido,
                                                   tag_caso="RECARGA LENTA (OVERNIGHT)", modo_lento=True,
-                                                  banco_bruto_lento=banco_bruto_final)
+                                                  banco_bruto_lento=banco_bruto_final,
+                                                  bateria_usd_kWh=bateria_usd_kWh,
+                                                  fator_custo_infra=fator_custo_infra, fator_eol=fator_eol)
 
 
 class RecargaMista(RecargaBase):
